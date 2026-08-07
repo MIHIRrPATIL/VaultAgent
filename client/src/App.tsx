@@ -11,6 +11,8 @@ import { DashboardPage } from "./pages/dashboardPage.tsx";
 import { SettingsPage } from "./pages/settingsPage.tsx";
 import { ChatsPage } from "./pages/chatsPage.tsx";
 import { getStoredVaultConfig } from "./lib/api";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // Smart Root Redirect based on user vault setup status
 const RootRedirect = () => {
@@ -36,10 +38,13 @@ function App() {
     let unlistenFn: (() => void) | null = null;
 
     const initBackend = async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const { listen } = await import("@tauri-apps/api/event");
+      const isTauri = typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ !== undefined;
+      if (!isTauri) {
+        if (active) setBackendStatus("ready");
+        return;
+      }
 
+      try {
         const unlisten = await listen<{ progress: number; message: string }>(
           "backend-download-status",
           (event) => {
@@ -66,7 +71,7 @@ function App() {
           setBackendStatus("downloading");
         }
       } catch (err) {
-        console.warn("Tauri context not available or error:", err);
+        console.warn("Tauri context error:", err);
         if (active) setBackendStatus("ready");
       }
     };
