@@ -1,0 +1,24 @@
+# Python backend outputs
+server/venv/
+server/.env
+server/__pycache__/
+server/build/
+server/dist/
+server/vault_agent_history.db
+server/vaultagent-backend.spec
+
+# Tauri client outputs
+client/node_modules/
+client/dist/
+client/dist-ssr/
+client/*.local
+client/src-tauri/target/
+client/src-tauri/binaries/vaultagent-backend
+client/src-tauri/binaries/vaultagent-backend.exe
+
+# Editor directories and files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.sw?

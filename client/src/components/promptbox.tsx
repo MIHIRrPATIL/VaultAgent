@@ -1,12 +1,20 @@
 import { useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { Send, X, FileText, Plus } from "lucide-react";
 import { getRandomPlaceholder } from "../lib/placeholers";
-import { Send, Link2, X, FileText, Plus } from "lucide-react";
+import { getStoredVaultConfig, saveVaultConfig, startPipelineRun } from "../lib/api";
+import { getSecret } from "../lib/secrets";
 
-function Promptbox() {
+interface PromptboxProps {
+  setActiveSessionId: (id: string | null) => void;
+}
+
+function Promptbox({ setActiveSessionId }: PromptboxProps) {
   const [prompt, setPrompt] = useState("");
-  const [chatHistory, setChatHistory] = useState<string[]>([]);
   const [placeholder] = useState(getRandomPlaceholder());
+
+  // Pipeline session state
+  const [isStarting, setIsStarting] = useState(false);
 
   // Interactive options states
   const [style, setStyle] = useState("ATOMIC");
@@ -68,7 +76,6 @@ function Promptbox() {
   };
 
   const handleDraftKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Shift+Enter adds a newline inside the draft input, plain Enter adds the draft
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       addDraft();
@@ -79,12 +86,59 @@ function Promptbox() {
     setDrafts((prev) => prev.filter((_, idx) => idx !== i));
   };
 
-  const handleSend = () => {
-    if (!prompt.trim()) return;
-    setChatHistory([...chatHistory, prompt]);
-    setPrompt("");
-    console.log(chatHistory);
+  const handleSend = async () => {
+    if (!prompt.trim() || isStarting) return;
+    const config = getStoredVaultConfig();
+    const vaultPath = config?.vaultPath || "/home/mihir/Documents/Obsidian/DSA/DSA";
+    let vaultId = config?.vaultId || "";
+    if (config && !vaultId) {
+      vaultId = crypto.randomUUID();
+      config.vaultId = vaultId;
+      saveVaultConfig(config);
+    }
+
+    setIsStarting(true);
+    try {
+      const payload = {
+        vault_path: vaultPath,
+        vault_id: vaultId,
+        prompt: prompt.trim(),
+        mode: webSearch ? ("research" as const) : ("raw_convert" as const),
+        urls: urls,
+        raw_drafts: drafts,
+        style_preset: (style.toLowerCase() === "creative" ? "essay" : style.toLowerCase() === "precise" ? "technical" : "atomic") as "atomic" | "essay" | "technical",
+        length: length.toLowerCase() as "short" | "medium" | "long",
+        linking_depth: (config?.linkingDepth || "deep") as "shallow" | "deep",
+        custom_save_path: config?.customSavePath || "/Generated",
+        naming_convention: config?.namingConvention || "kebab",
+        date_format: config?.dateFormat || "YYYY-MM-DD",
+        frontmatter_keys: config?.frontmatterKeys || ["tags", "created", "source", "status"],
+        search_provider: config?.searchProvider || "duckduckgo",
+        scrape_provider: config?.scrapeProvider || "crawl4ai",
+      };
+
+      const keys = {
+        geminiKey: await getSecret("geminiKey"),
+        openrouterKey: await getSecret("openrouterKey"),
+        tavilyKey: await getSecret("tavilyKey"),
+        firecrawlKey: await getSecret("firecrawlKey"),
+      };
+
+      const res = await startPipelineRun(payload, keys);
+      setActiveSessionId(res.session_id);
+      setPrompt("");
+      setUrls([]);
+      setDrafts([]);
+      setUrlInput("");
+      setDraftInput("");
+    } catch (err) {
+      console.error("Error starting pipeline:", err);
+      alert("Failed to start agent pipeline. Ensure backend service is running.");
+    } finally {
+      setIsStarting(false);
+    }
   };
+
 
   const hasContent = webSearch ? urls.length > 0 : drafts.length > 0;
 
@@ -113,7 +167,7 @@ function Promptbox() {
   return (
     <div className="w-[65%] max-w-4xl flex flex-col gap-6 items-center">
       {/* Glassmorphism prompt box card */}
-      <div className="bg-black/30 backdrop-blur-2xl w-full flex flex-col border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+      <div id="prompt-input-card" className="bg-black/30 backdrop-blur-2xl w-full flex flex-col border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
 
         {/* Preview strip — shows above textarea when URLs or drafts are attached */}
         <AnimatePresence>
@@ -171,7 +225,7 @@ function Promptbox() {
                       className="flex items-center gap-2 bg-accent/8 border border-accent/20 rounded-lg px-3 py-1.5"
                     >
                       <FileText size={13} className="text-accent/60 shrink-0" />
-                      <span className="text-sm text-secondry/40 truncate max-w-[220px]">
+                      <span className="text-sm text-secondry/40 truncate max-w-55">
                         {draft.slice(0, 60)}{draft.length > 60 ? "…" : ""}
                       </span>
                       <button
@@ -198,7 +252,8 @@ function Promptbox() {
               handleSend();
             }
           }}
-          className="bg-transparent text-secondry/80 placeholder:text-secondry/30 px-6 pt-5 pb-1 text-xl w-full min-h-[100px] outline-none resize-none"
+          className="bg-transparent text-secondry/80 placeholder:text-secondry/30 px-6 pt-5 pb-1 text-xl w-full min-h-25 outline-none resize-none"
+
           placeholder={placeholder}
         />
 

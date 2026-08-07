@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]==0.30.6
+pydantic
+python-multipart==0.0.9
+networkx
+markdown-it-py
+mdit-py-plugins
+aiofiles
+httpx
+pyyaml
+jinja2
+html2text
+duckduckgo-search
+crawl4ai

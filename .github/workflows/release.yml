@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            suffix: ''
+          - platform: 'ubuntu-22.04'
+            target: 'x86_64-unknown-linux-gnu'
+            suffix: ''
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            suffix: '.exe'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Setup Python & Compile Backend
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller and dependencies
+        run: |
+          cd server
+          python -m venv venv
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            ./venv/Scripts/pip install -r requirements.txt
+            ./venv/Scripts/pip install pyinstaller
+            ./venv/Scripts/pyinstaller --clean --onefile --name vaultagent-backend-${{ matrix.target }} --collect-all uvicorn --collect-all fastapi --collect-all pydantic --collect-all jinja2 --collect-all duckduckgo_search --collect-all crawl4ai --exclude-module nltk app.py
+          else
+            ./venv/bin/pip install -r requirements.txt
+            ./venv/bin/pip install pyinstaller
+            ./venv/bin/pyinstaller --clean --onefile --name vaultagent-backend-${{ matrix.target }} --collect-all uvicorn --collect-all fastapi --collect-all pydantic --collect-all jinja2 --collect-all duckduckgo_search --collect-all crawl4ai --exclude-module nltk app.py
+          fi
+        shell: bash
+
+      # 2. Setup Node and build Tauri frontend
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install frontend dependencies
+        run: |
+          cd client
+          npm install
+          npm run build
+
+      # 3. Setup Rust
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # 4. Install Linux System Dependencies (Only required on Ubuntu)
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # 5. Build Tauri App
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'VaultAgent v__VERSION__'
+          releaseBody: 'Lightweight frontend client and precompiled backend reasoning models.'
+          releaseDraft: false
+          prerelease: false
+          includeDebug: false
+
+      # 6. Upload compiled backend binary to the same release
+      - name: Upload Backend Binary to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            server/dist/vaultagent-backend-${{ matrix.target }}${{ matrix.suffix }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

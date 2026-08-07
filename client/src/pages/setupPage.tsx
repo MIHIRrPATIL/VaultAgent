@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { 
-  Shield, FolderOpen, PlusCircle, X, Lock, ArrowRight, ArrowLeft, 
-  Settings, Key, Layers, FileText, CheckCircle, AlertTriangle 
+  FolderOpen, PlusCircle, X, 
+  Key, Layers, FileText, CheckCircle, AlertTriangle 
 } from "lucide-react";
+
 import { gsap } from "gsap";
 import Stepper, { Step } from "../components/Stepper";
-import { open } from "@tauri-apps/plugin-dialog";
+import { saveVaultConfig, scanVault } from "../lib/api";
+import { saveSecret, getSecret } from "../lib/secrets";
 
 const Setuppage: React.FC = () => {
   const navigate = useNavigate();
@@ -15,10 +17,8 @@ const Setuppage: React.FC = () => {
   // Wizard Steps (1 to 6)
   const [step, setStep] = useState(1);
 
-  // Exit transition state
-  const [isExiting, setIsExiting] = useState(false);
-
   // --- Step 1: Vault Selection states ---
+
   const [vaultPath, setVaultPath] = useState("");
   const [vaultType, setVaultType] = useState<"existing" | "new" | null>(null);
   const [newVaultName, setNewVaultName] = useState("");
@@ -80,60 +80,124 @@ const Setuppage: React.FC = () => {
   };
 
   // --- Folder Picker utility ---
-  const selectFolder = async (
-    type: "existing" | "new",
-    fallbackPath: string,
-    fallbackMessage: string
-  ) => {
+  const handleSelectFolder = async () => {
     try {
-      const selected = await open({ directory: true, multiple: false });
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const selected = await dialog.open({ directory: true, multiple: false });
       if (selected) {
         setVaultPath(selected as string);
-        setVaultType(type);
+        setVaultType("existing");
       }
     } catch (err) {
-      console.warn(
-        "Dialog plugin call failed (likely missing capability permission or running outside Tauri):",
-        err
-      );
-      // Dev-only fallback — window.prompt() may silently no-op on macOS WKWebView
-      const path = window.prompt(fallbackMessage, fallbackPath);
+      console.warn("Tauri dialog plugin not available, using prompt fallback", err);
+      const path = prompt("Enter local folder path manually:", "/home/user/my-vault");
       if (path) {
         setVaultPath(path);
-        setVaultType(type);
+        setVaultType("existing");
       }
     }
   };
 
-  const handleSelectFolder = () =>
-    selectFolder("existing", "/home/user/my-vault", "Enter local folder path manually:");
-
-  const handleSelectNewVaultFolder = () =>
-    selectFolder("new", "/home/user", "Enter folder path where new vault should be created:");
-
-  // --- Validate Vault (Checks for .obsidian or MD structure) ---
-  const validateAndProceed = async () => {
-    if (!vaultPath) return;
-    setIsValidating(true);
-
-    // In a production Tauri environment, we would use the fs module to check for .obsidian/
-    // Here we simulate the validation.
-    setTimeout(() => {
-      setIsValidating(false);
-      
-      // Simulate detection: if path contains "plain" or "markdown" or is a new folder, trigger the warning
-      const isPlainFolder = !vaultPath.endsWith(".obsidian") && !vaultPath.includes("vault");
-      
-      if (vaultType === "existing" && isPlainFolder) {
-        setShowValidationWarning(true);
-      } else {
-        setStep(2);
+  const handleSelectNewVaultFolder = async () => {
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const selected = await dialog.open({ directory: true, multiple: false });
+      if (selected) {
+        setVaultPath(selected as string);
+        setVaultType("new");
       }
-    }, 800);
+    } catch (err) {
+      console.warn("Tauri dialog plugin not available, using prompt fallback", err);
+      const path = prompt("Enter folder path where new vault should be created:", "/home/user");
+      if (path) {
+        setVaultPath(path);
+        setVaultType("new");
+      }
+    }
   };
 
+  // Exit transition state
+  const [_isExiting, setIsExiting] = useState(false);
+
+
+
   // --- Final Onboarding Submission ---
-  const handleCompleteSetup = () => {
+  const handleCompleteSetup = async () => {
+    // Save keys securely in stronghold
+    try {
+      await saveSecret("openrouterKey", openrouterKey);
+      await saveSecret("geminiKey", geminiKey);
+    } catch (err) {
+      console.error("Failed to save keys securely:", err);
+    }
+
+    let vaultId = crypto.randomUUID();
+    try {
+      const storedLinked = localStorage.getItem("vault_agent_linked_vaults");
+      if (storedLinked) {
+        const linkedList = JSON.parse(storedLinked);
+        const existing = linkedList.find((v: any) => v.path === vaultPath);
+        if (existing) {
+          vaultId = existing.id;
+        }
+      }
+    } catch (e) {}
+
+    const config = {
+      vaultPath,
+      vaultId,
+      excludedFolders,
+      saveLocationType,
+      customSavePath,
+      namingConvention,
+      dateFormat,
+      frontmatterKeys,
+      stylePreset,
+      linkingDepth,
+      geminiKey: "", // Store as empty string to prevent plain text leaks
+      openrouterKey: "", // Store as empty string to prevent plain text leaks
+      autoIndexOnLaunch,
+    };
+
+    // Save configuration locally
+    saveVaultConfig(config);
+
+    // Add to linked vaults in localStorage
+    try {
+      const storedLinked = localStorage.getItem("vault_agent_linked_vaults");
+      let linkedList = [];
+      if (storedLinked) {
+        linkedList = JSON.parse(storedLinked);
+      }
+      if (!linkedList.some((v: any) => v.path === vaultPath)) {
+        const folderName = vaultPath.split(/[/\\]/).pop() || "Unnamed Vault";
+        linkedList.push({
+          id: vaultId,
+          path: vaultPath,
+          name: folderName,
+          totalNotes: 0,
+          totalLinks: 0,
+          lastIndexed: new Date().toLocaleDateString(),
+        });
+        localStorage.setItem("vault_agent_linked_vaults", JSON.stringify(linkedList));
+      }
+    } catch (e) {
+      console.error("Failed to update linked vaults list:", e);
+    }
+
+    // Trigger backend indexing scan if vault path is configured
+    if (vaultPath) {
+      // Pass the actual keys temporarily to the scan function
+      const scanConfig = {
+        ...config,
+        geminiKey,
+        openrouterKey,
+      };
+      scanVault(scanConfig).catch((err) => {
+        console.warn("[VaultAgent] Initial indexer scan request warning:", err);
+      });
+    }
+
     setIsExiting(true);
     if (cardRef.current) {
       gsap.to(cardRef.current, {
@@ -143,13 +207,15 @@ const Setuppage: React.FC = () => {
         duration: 0.6,
         ease: "power3.inOut",
         onComplete: () => {
-          // Navigate to prompt main page
-          navigate("/prompt");
+          // Navigate to dashboard page after completing setup
+          navigate("/dashboard");
         },
       });
     } else {
-      navigate("/prompt");
+      navigate("/dashboard");
     }
+
+
   };
 
   // Stagger entry animations on mount
@@ -161,6 +227,18 @@ const Setuppage: React.FC = () => {
         { opacity: 1, y: 0, duration: 1.0, ease: "power3.out" }
       );
     }
+
+    const loadSecrets = async () => {
+      try {
+        const orKey = await getSecret("openrouterKey");
+        const gemKey = await getSecret("geminiKey");
+        if (orKey) setOpenrouterKey(orKey);
+        if (gemKey) setGeminiKey(gemKey);
+      } catch (err) {
+        console.error("Failed to load keys from secure store:", err);
+      }
+    };
+    loadSecrets();
   }, []);
 
 
@@ -298,7 +376,7 @@ const Setuppage: React.FC = () => {
               {showValidationWarning && (
                 <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col gap-3 animate-in slide-in-from-top-4 duration-300">
                   <div className="flex items-center gap-2.5 text-amber-400">
-                    <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                    <AlertTriangle className="w-5 h-5 shrink-0" />
                     <span className="text-sm font-semibold">Not an Obsidian Vault</span>
                   </div>
                   <p className="text-xs text-secondry/70 leading-normal">
@@ -401,7 +479,8 @@ const Setuppage: React.FC = () => {
                     value={newExcludedInput}
                     onChange={(e) => setNewExcludedInput(e.target.value)}
                     onKeyDown={handleAddExcluded}
-                    className="bg-transparent border-none outline-none focus:ring-0 text-xs text-secondry p-0 flex-grow min-w-[120px]"
+                    className="bg-transparent border-none outline-none focus:ring-0 text-xs text-secondry p-0 grow min-w-30"
+
                     placeholder="Add folder... [Enter]"
                   />
                 </div>
@@ -560,7 +639,8 @@ const Setuppage: React.FC = () => {
                     value={newKeyInput}
                     onChange={(e) => setNewKeyInput(e.target.value)}
                     onKeyDown={handleAddKey}
-                    className="bg-transparent border-none outline-none focus:ring-0 text-xs text-secondry p-0 flex-grow min-w-[120px]"
+                    className="bg-transparent border-none outline-none focus:ring-0 text-xs text-secondry p-0 grow min-w-30"
+
                     placeholder="Add field... [Enter]"
                   />
                 </div>
@@ -695,7 +775,8 @@ const Setuppage: React.FC = () => {
                     onChange={() => setAutoIndexOnLaunch(!autoIndexOnLaunch)}
                     className="sr-only peer"
                   />
-                  <div className="w-10 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-secondry after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+                  <div className="w-10 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-secondry after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+
                 </label>
               </div>
             </div>

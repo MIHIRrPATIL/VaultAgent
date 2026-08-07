@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "bash -c 'trap \"kill 0\" EXIT; python3 -c \"import socket; s=socket.socket(); s.settimeout(0.1); s.connect((\\\"127.0.0.1\\\", 5000))\" 2>/dev/null || (cd ../server && ./venv/bin/python app.py &); while ! python3 -c \"import socket; s=socket.socket(); s.settimeout(0.1); s.connect((\\\"127.0.0.1\\\", 5000))\" 2>/dev/null; do sleep 0.1; done; vite'",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -17,6 +17,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-stronghold": "^2.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "gsap": "^3.13.0",
